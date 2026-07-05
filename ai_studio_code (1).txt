@@ -1,0 +1,570 @@
+import React, { useState, useEffect } from "react";
+
+// Initial standard templates so the app doesn't launch completely blank
+const INITIAL_HEADER = {
+  schoolName: "Excellence International Academy",
+  examType: "SA1",
+  customExamType: "",
+  className: "Grade 10",
+  subject: "General Science",
+  date: "2026-07-06",
+  duration: "3 Hours"
+};
+
+const INITIAL_SECTIONS = [
+  {
+    id: "sec-A",
+    name: "Section A",
+    description: "Multiple Choice Questions. All questions are compulsory. (1 Mark Each)",
+    questions: [
+      { id: "q-1", type: "MCQ", text: "Which organelle is known as the powerhouse of the cell?", options: ["Nucleus", "Ribosome", "Mitochondria", "Golgi Apparatus"], correctAnswer: "Mitochondria", marks: 1 },
+      { id: "q-2", type: "MCQ", text: "What is the chemical symbol for Gold?", options: ["Gd", "Au", "Ag", "Fe"], correctAnswer: "Au", marks: 1 }
+    ]
+  },
+  {
+    id: "sec-B",
+    name: "Section B",
+    description: "Short Answer Questions. Answer in 30-50 words. (3 Marks Each)",
+    questions: [
+      { id: "q-3", type: "Short", text: "Explain the law of reflection with a neat diagram.", options: [], correctAnswer: "", marks: 3 },
+      { id: "q-4", type: "Short", text: "Why do we see water droplets on the outer surface of a glass containing ice-cold water?", options: [], correctAnswer: "", marks: 3 }
+    ]
+  },
+  {
+    id: "sec-C",
+    name: "Section C",
+    description: "Long Answer Questions. Answer in 80-120 words. (5 Marks Each)",
+    questions: [
+      { id: "q-5", type: "Long", text: "Describe the structure and functioning of human nephrons with a labeled illustration.", options: [], correctAnswer: "", marks: 5 }
+    ]
+  }
+];
+
+export default function QuestionPaperBuilder() {
+  // Safe initialization checks to avoid overwriting existing localStorage formats
+  const [header, setHeader] = useState(() => {
+    try {
+      const saved = localStorage.getItem("qp_builder_header");
+      return saved ? JSON.parse(saved) : INITIAL_HEADER;
+    } catch (e) {
+      return INITIAL_HEADER;
+    }
+  });
+
+  const [sections, setSections] = useState(() => {
+    try {
+      const saved = localStorage.getItem("qp_builder_sections");
+      return saved ? JSON.parse(saved) : INITIAL_SECTIONS;
+    } catch (e) {
+      return INITIAL_SECTIONS;
+    }
+  });
+
+  // Editor UX States
+  const [activeTab, setActiveTab] = useState("edit"); // "edit" | "preview"
+  const [editingQuestion, setEditingQuestion] = useState(null); // Active copy of question being edited
+  const [editingSectionId, setEditingSectionId] = useState(null); // Parent section ID of editing question
+  const [draggedItem, setDraggedItem] = useState(null); // Drag track: { sectionId, index }
+  const [copied, setCopied] = useState(false); // Clipboard feedback tracker
+  const [showAnswers, setShowAnswers] = useState(false); // Toggle answer sheet markings in print/preview
+
+  // Persist State Changes safely
+  useEffect(() => {
+    localStorage.setItem("qp_builder_header", JSON.stringify(header));
+  }, [header]);
+
+  useEffect(() => {
+    localStorage.setItem("qp_builder_sections", JSON.stringify(sections));
+  }, [sections]);
+
+  // Derived Values
+  const totalQuestions = sections.reduce((sum, sec) => sum + sec.questions.length, 0);
+  const totalMarks = sections.reduce((sum, sec) => {
+    return sum + sec.questions.reduce((qSum, q) => qSum + (Number(q.marks) || 0), 0);
+  }, 0);
+
+  // Re-order Logic (Up / Down for touch devices)
+  const moveQuestion = (sectionId, index, direction) => {
+    setSections(prev => prev.map(sec => {
+      if (sec.id !== sectionId) return sec;
+      const list = [...sec.questions];
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= list.length) return sec;
+
+      const temp = list[index];
+      list[index] = list[targetIndex];
+      list[targetIndex] = temp;
+      return { ...sec, questions: list };
+    }));
+  };
+
+  // HTML5 Drag & Drop handlers
+  const handleDragStart = (e, sectionId, index) => {
+    setDraggedItem({ sectionId, index });
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e, targetSectionId, targetIndex) => {
+    e.preventDefault();
+    if (!draggedItem) return;
+
+    const sourceSecId = draggedItem.sectionId;
+    const sourceIdx = draggedItem.index;
+
+    let newSections = sections.map(sec => ({
+      ...sec,
+      questions: [...sec.questions]
+    }));
+
+    const sourceSec = newSections.find(s => s.id === sourceSecId);
+    const targetSec = newSections.find(s => s.id === targetSectionId);
+
+    if (!sourceSec || !targetSec) return;
+
+    const [removed] = sourceSec.questions.splice(sourceIdx, 1);
+
+    if (targetIndex === -1) {
+      targetSec.questions.push(removed);
+    } else {
+      targetSec.questions.splice(targetIndex, 0, removed);
+    }
+
+    setSections(newSections);
+    setDraggedItem(null);
+  };
+
+  // Add a new blank question to a section
+  const handleAddQuestion = (sectionId) => {
+    const newId = "q-" + Date.now();
+    const newQuestion = {
+      id: newId,
+      type: "MCQ",
+      text: "",
+      options: ["Option A", "Option B", "Option C", "Option D"],
+      correctAnswer: "",
+      marks: 1
+    };
+
+    setSections(prev => prev.map(sec => {
+      if (sec.id === sectionId) {
+        return { ...sec, questions: [...sec.questions, newQuestion] };
+      }
+      return sec;
+    }));
+
+    setEditingSectionId(sectionId);
+    setEditingQuestion(newQuestion);
+  };
+
+  // Track Type Switch in Inline Editor
+  const handleTypeChangeInEdit = (type) => {
+    let defaultMarks = 1;
+    let options = [];
+    if (type === "MCQ") {
+      defaultMarks = 1;
+      options = ["", "", "", ""];
+    } else if (type === "Short") {
+      defaultMarks = 3;
+    } else if (type === "Long") {
+      defaultMarks = 5;
+    }
+    setEditingQuestion(prev => ({
+      ...prev,
+      type,
+      marks: defaultMarks,
+      options,
+      correctAnswer: ""
+    }));
+  };
+
+  // Save changes from editor to state
+  const saveEditedQuestion = () => {
+    setSections(prev => prev.map(sec => {
+      if (sec.id === editingSectionId) {
+        return {
+          ...sec,
+          questions: sec.questions.map(q => q.id === editingQuestion.id ? editingQuestion : q)
+        };
+      }
+      return sec;
+    }));
+    setEditingQuestion(null);
+    setEditingSectionId(null);
+  };
+
+  // Delete Question Handler
+  const handleDeleteQuestion = (sectionId, questionId) => {
+    if (window.confirm("Are you sure you want to remove this question?")) {
+      setSections(prev => prev.map(sec => {
+        if (sec.id === sectionId) {
+          return {
+            ...sec,
+            questions: sec.questions.filter(q => q.id !== questionId)
+          };
+        }
+        return sec;
+      }));
+      if (editingQuestion?.id === questionId) {
+        setEditingQuestion(null);
+        setEditingSectionId(null);
+      }
+    }
+  };
+
+  // Reset entire workflow to Initial State
+  const handleResetData = () => {
+    if (window.confirm("This will overwrite current layout and load the default demo paper. Proceed?")) {
+      setHeader(INITIAL_HEADER);
+      setSections(INITIAL_SECTIONS);
+      setEditingQuestion(null);
+      setEditingSectionId(null);
+    }
+  };
+
+  // Export copyable text format
+  const handleCopySummary = () => {
+    let text = `=== ${header.schoolName.toUpperCase()} ===\n`;
+    text += `${header.examType === "Custom" ? header.customExamType : header.examType} | Class: ${header.className} | Subject: ${header.subject}\n`;
+    text += `Duration: ${header.duration} | Total Marks: ${totalMarks}\n`;
+    text += `Date: ${header.date}\n\n`;
+
+    sections.forEach(sec => {
+      if (sec.questions.length === 0) return;
+      text += `--- ${sec.name} ---\n`;
+      if (sec.description) text += `${sec.description}\n`;
+
+      sec.questions.forEach((q, idx) => {
+        text += `${idx + 1}. ${q.text || "(Untitled Question)"} [Marks: ${q.marks}]\n`;
+        if (q.type === "MCQ" && q.options?.length > 0) {
+          q.options.forEach((opt, oIdx) => {
+            text += `   ${String.fromCharCode(65 + oIdx)}) ${opt}\n`;
+          });
+          if (q.correctAnswer) {
+            text += `   [Correct Answer: ${q.correctAnswer}]\n`;
+          }
+        }
+        text += `\n`;
+      });
+    });
+
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Trigger print mechanism
+  const triggerPrint = () => {
+    window.print();
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col font-sans">
+      {/* Dynamic CSS Injection to Isolate Printable View */}
+      <style dangerouslySetInnerHTML={{__html: `
+        @media print {
+          body {
+            background-color: white !important;
+            color: black !important;
+          }
+          .no-print {
+            display: none !important;
+          }
+          .print-area {
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            font-family: 'Times New Roman', Times, Georgia, serif !important;
+          }
+          .page-break-avoid {
+            page-break-inside: avoid;
+          }
+        }
+      `}} />
+
+      {/* Main App Banner */}
+      <header className="bg-indigo-900 text-white p-4 shadow-md no-print">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4">
+          <div className="flex items-center space-x-3">
+            <svg className="w-8 h-8 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight">Academic Question Paper Architect</h1>
+              <p className="text-xs text-indigo-200">Draft, organize, and export high-fidelity examination papers</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleResetData}
+              className="px-3 py-1.5 bg-indigo-800 hover:bg-indigo-700 text-indigo-100 rounded text-xs font-semibold flex items-center gap-1 transition"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 15M20 3v11h-11" /></svg>
+              Reset Paper
+            </button>
+            <button
+              onClick={handleCopySummary}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold flex items-center gap-1 transition"
+            >
+              {copied ? (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 10.742l1.99 1.1a1 1 0 001.08 0l1.99-1.1m-4.06 4.306l1.99 1.1a1 1 0 001.08 0l1.99-1.1M3.186 8.007L12 3.146l8.814 4.86a2 2 0 010 3.488L12 16.354 3.186 11.493a2 2 0 010-3.488z" /></svg>
+                  Share Summary
+                </button>
+              )}
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Statistics Bar */}
+      <div className="bg-white border-b py-2 px-4 shadow-sm no-print">
+        <div className="max-w-7xl mx-auto flex justify-between items-center text-xs md:text-sm">
+          <div className="flex gap-4 text-slate-600">
+            <span>Sections: <strong>3</strong></span>
+            <span>Total Questions: <strong>{totalQuestions}</strong></span>
+            <span>Total Marks: <strong className="text-indigo-600">{totalMarks}</strong></span>
+          </div>
+          <div className="flex border rounded-lg overflow-hidden bg-slate-100 p-0.5">
+            <button
+              onClick={() => setActiveTab("edit")}
+              className={`px-3 py-1 text-xs font-semibold rounded ${activeTab === "edit" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-600 hover:text-indigo-600"}`}
+            >
+              Editor Mode
+            </button>
+            <button
+              onClick={() => setActiveTab("preview")}
+              className={`px-3 py-1 text-xs font-semibold rounded ${activeTab === "preview" ? "bg-white text-indigo-600 shadow-sm" : "text-slate-600 hover:text-indigo-600"}`}
+            >
+              Print Preview
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Workspace */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 flex flex-col lg:flex-row gap-6">
+        
+        {activeTab === "edit" ? (
+          <>
+            {/* Left Column: Metadata Panel */}
+            <section className="w-full lg:w-1/3 space-y-4 no-print">
+              <div className="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+                <h2 className="text-base font-bold text-slate-800 mb-3 border-b pb-2 flex items-center gap-1.5">
+                  <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                  Paper Settings
+                </h2>
+                
+                <div className="space-y-3.5">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">School / Institution Name</label>
+                    <input
+                      type="text"
+                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
+                      value={header.schoolName}
+                      onChange={e => setHeader({...header, schoolName: e.target.value})}
+                      placeholder="Enter institution title"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Exam Term</label>
+                      <select
+                        className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
+                        value={header.examType}
+                        onChange={e => setHeader({...header, examType: e.target.value})}
+                      >
+                        <option value="FA1">Formative Assessment 1 (FA1)</option>
+                        <option value="FA2">Formative Assessment 2 (FA2)</option>
+                        <option value="FA3">Formative Assessment 3 (FA3)</option>
+                        <option value="FA4">Formative Assessment 4 (FA4)</option>
+                        <option value="SA1">Summative Assessment 1 (SA1)</option>
+                        <option value="SA2">Summative Assessment 2 (SA2)</option>
+                        <option value="Custom">Custom Title...</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Class</label>
+                      <input
+                        type="text"
+                        className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
+                        value={header.className}
+                        onChange={e => setHeader({...header, className: e.target.value})}
+                        placeholder="e.g. Grade 10"
+                      />
+                    </div>
+                  </div>
+
+                  {header.examType === "Custom" && (
+                    <div className="animate-fadeIn">
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Custom Exam Title</label>
+                      <input
+                        type="text"
+                        className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-amber-50"
+                        value={header.customExamType}
+                        onChange={e => setHeader({...header, customExamType: e.target.value})}
+                        placeholder="e.g. Mid-Term Assessment"
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Subject</label>
+                    <input
+                      type="text"
+                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
+                      value={header.subject}
+                      onChange={e => setHeader({...header, subject: e.target.value})}
+                      placeholder="e.g. Science"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
+                      <input
+                        type="date"
+                        className="w-full border border-slate-300 rounded-lg p-2 text-xs focus:ring-1 focus:ring-indigo-500 outline-none"
+                        value={header.date}
+                        onChange={e => setHeader({...header, date: e.target.value})}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Duration</label>
+                      <input
+                        type="text"
+                        className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none"
+                        value={header.duration}
+                        onChange={e => setHeader({...header, duration: e.target.value})}
+                        placeholder="e.g. 3 Hours"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Print Preferences Toggle */}
+              <div className="bg-white rounded-xl shadow-sm p-4 border border-slate-200">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Display Preferences</h3>
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="rounded text-indigo-600 focus:ring-indigo-500 h-4 w-4"
+                    checked={showAnswers}
+                    onChange={e => setShowAnswers(e.target.checked)}
+                  />
+                  <span className="text-sm text-slate-700 font-medium">Render Answer Key details</span>
+                </label>
+                <p className="text-xs text-slate-400 mt-1 pl-6">When checked, correct answers will be highlighted in both the preview and printing formats.</p>
+              </div>
+            </section>
+
+            {/* Right Column: Interactive Editor Workspace */}
+            <section className="flex-1 space-y-6">
+              {sections.map(sec => (
+                <div
+                  key={sec.id}
+                  className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 transition"
+                  onDragOver={handleDragOver}
+                  onDrop={(e) => handleDrop(e, sec.id, -1)}
+                >
+                  {/* Section Title Configuration */}
+                  <div className="flex flex-col md:flex-row md:items-center justify-between border-b pb-3 gap-2">
+                    <div className="flex-1">
+                      <input
+                        type="text"
+                        className="font-bold text-slate-800 text-lg border-b border-transparent hover:border-slate-300 focus:border-indigo-600 outline-none w-full bg-transparent px-1"
+                        value={sec.name}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSections(prev => prev.map(s => s.id === sec.id ? { ...s, name: val } : s));
+                        }}
+                      />
+                      <input
+                        type="text"
+                        className="text-xs text-slate-500 border-b border-transparent hover:border-slate-300 focus:border-indigo-600 outline-none w-full mt-1 bg-transparent px-1"
+                        value={sec.description}
+                        placeholder="Enter description, guidelines or grading logic for section..."
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setSections(prev => prev.map(s => s.id === sec.id ? { ...s, description: val } : s));
+                        }}
+                      />
+                    </div>
+                    <button
+                      onClick={() => handleAddQuestion(sec.id)}
+                      className="shrink-0 self-start md:self-center px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                      Add Question
+                    </button>
+                  </div>
+
+                  {/* Questions List Container */}
+                  <div className="mt-4 space-y-3 min-h-[50px]">
+                    {sec.questions.length === 0 ? (
+                      <div className="text-center py-6 text-slate-400 text-xs border border-dashed rounded-lg border-slate-200">
+                        Drag items or select "Add Question" to populate.
+                      </div>
+                    ) : (
+                      sec.questions.map((q, idx) => {
+                        const isEditing = editingQuestion && editingQuestion.id === q.id;
+
+                        return (
+                          <div
+                            key={q.id}
+                            draggable={!isEditing}
+                            onDragStart={(e) => handleDragStart(e, sec.id, idx)}
+                            onDragOver={handleDragOver}
+                            onDrop={(e) => handleDrop(e, sec.id, idx)}
+                            className={`group relative border rounded-lg p-3 md:p-4 bg-white hover:bg-slate-50 transition ${draggedItem && draggedItem.sectionId === sec.id && draggedItem.index === idx ? "opacity-40 border-dashed border-indigo-500" : "border-slate-200"}`}
+                          >
+                            {isEditing ? (
+                              /* --- Inline Question Editor View --- */
+                              <div className="space-y-3.5 bg-indigo-50/50 p-3 rounded-lg border border-indigo-100 animate-fadeIn">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold text-indigo-900 mb-1">Question Text</label>
+                                    <textarea
+                                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white min-h-[64px]"
+                                      value={editingQuestion.text}
+                                      onChange={e => setEditingQuestion({...editingQuestion, text: e.target.value})}
+                                      placeholder="What concept is being assessed?"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-xs font-bold text-indigo-900 mb-1">Response Type</label>
+                                    <select
+                                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white"
+                                      value={editingQuestion.type}
+                                      onChange={e => handleTypeChangeInEdit(e.target.value)}
+                                    >
+                                      <option value="MCQ">Multiple Choice (MCQ)</option>
+                                      <option value="Short">Short Answer</option>
+                                      <option value="Long">Long Answer</option>
+                                    </select>
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="block text-xs font-bold text-indigo-900 mb-1">Marks Allotted</label>
+                                    <input
+                                      type="number"
+                                      className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-1 focus:ring-indigo-500 outline-none bg-white"
+                                      value={editingQuestion.marks}
+                                
